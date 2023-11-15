@@ -147,6 +147,7 @@ void svr_getopts(int argc, char ** argv) {
 	char* maxauthtries_arg = NULL;
 	char* reexec_fd_arg = NULL;
 	char* keyfile = NULL;
+	char* authkeysfile = NULL;
 	char c;
 #if DROPBEAR_PLUGIN
         char* pubkey_plugin = NULL;
@@ -173,6 +174,8 @@ void svr_getopts(int argc, char ** argv) {
 	svr_opts.hostkey = NULL;
 	svr_opts.delay_hostkey = 0;
 	svr_opts.pidfile = expand_homedir_path(DROPBEAR_PIDFILE);
+	svr_opts.authkeysfile = NULL;
+	
 #if DROPBEAR_SVR_LOCALTCPFWD
 	svr_opts.nolocaltcp = 0;
 #endif
@@ -322,6 +325,9 @@ void svr_getopts(int argc, char ** argv) {
 				case 'u':
 					/* backwards compatibility with old urandom option */
 					break;
+				case 'U':
+					next = &authkeysfile;
+					break;
 #if DROPBEAR_PLUGIN
                                 case 'A':
                                         next = &pubkey_plugin;
@@ -371,6 +377,10 @@ void svr_getopts(int argc, char ** argv) {
 			if (keyfile) {
 				addhostkey(keyfile);
 				keyfile = NULL;
+			}
+			if (authkeysfile) {
+				svr_opts.authkeysfile = m_strdup(authkeysfile);
+				authkeysfile = NULL;
 			}
 		}
 	}
