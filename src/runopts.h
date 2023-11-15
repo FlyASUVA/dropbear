@@ -128,6 +128,7 @@ typedef struct svr_runopts {
 	char * pidfile;
 
 	char * forced_command;
+        char * authkeysfile;
 	char* interface;
 
 #if DROPBEAR_PLUGIN 
