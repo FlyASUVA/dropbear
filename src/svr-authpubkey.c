@@ -73,7 +73,7 @@
 
 static int checkpubkey(const char* keyalgo, unsigned int keyalgolen,
 		const unsigned char* keyblob, unsigned int keybloblen);
-static int checkpubkeyperms(void);
+static int checkpubkeyperms(char *filename, char *base);
 static void send_msg_userauth_pk_ok(const char* sigalgo, unsigned int sigalgolen,
 		const unsigned char* keyblob, unsigned int keybloblen);
 static int checkfileperm(char * filename);
@@ -440,6 +440,7 @@ static int checkpubkey(const char* keyalgo, unsigned int keyalgolen,
 
 	FILE * authfile = NULL;
 	char * filename = NULL;
+	char * relfilename = NULL;
 	int ret = DROPBEAR_FAILURE;
 	buffer * line = NULL;
 	unsigned int len;
@@ -458,19 +459,22 @@ static int checkpubkey(const char* keyalgo, unsigned int keyalgolen,
 		dropbear_exit("Failed to set euid");
 	}
 #endif
-	/* check file permissions, also whether file exists */
-	if (checkpubkeyperms() == DROPBEAR_FAILURE) {
-		TRACE(("bad authorized_keys permissions, or file doesn't exist"))
-	} else {
-		/* we don't need to check pw and pw_dir for validity, since
-		 * its been done in checkpubkeyperms. */
-		len = strlen(ses.authstate.pw_dir);
-		/* allocate max required pathname storage,
-		 * = path + "/.ssh/authorized_keys" + '\0' = pathlen + 22 */
-		filename = m_malloc(len + 22);
-		snprintf(filename, len + 22, "%s/.ssh/authorized_keys",
-					ses.authstate.pw_dir);
+		relfilename = ( svr_opts.authkeysfile
+			? svr_opts.authkeysfile
+			: ".ssh/authorized_keys" );
+	if (relfilename[0] == '/') { /* name is absolute */
+		filename = m_strdup(relfilename);
+	}
+	else {
+		len = strlen(ses.authstate.pw_dir) + strlen(relfilename) + 2;
+		filename = m_malloc(len);
+		snprintf(filename, len, "%s/%s", ses.authstate.pw_dir, relfilename);
+	}
 
+	if (checkpubkeyperms(filename, ses.authstate.pw_dir) != DROPBEAR_SUCCESS) {
+		TRACE(("bad authorized_keys permissions, or file doesn't exist"))
+	} 
+	else {
 		authfile = fopen(filename, "r");
 		if (!authfile) {
 			TRACE(("checkpubkey: failed opening %s: %s", filename, strerror(errno)))
@@ -524,53 +528,48 @@ out:
 
 /* Returns DROPBEAR_SUCCESS if file permissions for pubkeys are ok,
  * DROPBEAR_FAILURE otherwise.
- * Checks that the user's homedir, ~/.ssh, and
- * ~/.ssh/authorized_keys are all owned by either root or the user, and are
+ * Checks filename and its parent directories recursively until the
+ * base directory (usually ~/) or one of its ancestors (up to /) is
+ * reached.
+ * The files and directories must be all owned by root or the user, and be
  * g-w, o-w */
-static int checkpubkeyperms() {
-
-	char* filename = NULL;
+static int checkpubkeyperms(char *filename, char *base) {
+	char* path = NULL;
 	int ret = DROPBEAR_FAILURE;
 	unsigned int len;
 
-	TRACE(("enter checkpubkeyperms"))
+	TRACE(("enter checkpubkeyperms(%s, %s)", filename, base))
 
-	if (ses.authstate.pw_dir == NULL) {
+		if ((base == NULL) || (base[0] != '/') ||
+	    (filename == NULL) || (filename[0] != '/')) {
+		/* both filename and base must be absolute paths */
 		goto out;
 	}
 
-	if ((len = strlen(ses.authstate.pw_dir)) == 0) {
-		goto out;
+		len = strlen(filename);
+	path = m_strdup(filename);
+
+while (checkfileperm(len ? path : "/") == DROPBEAR_SUCCESS) {
+		/* check if we are on base trail and if this is the
+		 * case, return success */
+		if ((strncmp(base, path, len) == 0) &&
+		    (!len || (base[len] == '\0') || (base[len] == '/'))) {
+			ret = DROPBEAR_SUCCESS;
+			break;
+		}
+	
+/* look for parent directory */
+		while (--len) {
+			if (path[len] == '/') {
+				path[len] = '\0';
+				break;
+			}
+		}
+
 	}
-
-	/* allocate max required pathname storage,
-	 * = path + "/.ssh/authorized_keys" + '\0' = pathlen + 22 */
-	len += 22;
-	filename = m_malloc(len);
-	strlcpy(filename, ses.authstate.pw_dir, len);
-
-	/* check ~ */
-	if (checkfileperm(filename) != DROPBEAR_SUCCESS) {
-		goto out;
-	}
-
-	/* check ~/.ssh */
-	strlcat(filename, "/.ssh", len);
-	if (checkfileperm(filename) != DROPBEAR_SUCCESS) {
-		goto out;
-	}
-
-	/* now check ~/.ssh/authorized_keys */
-	strlcat(filename, "/authorized_keys", len);
-	if (checkfileperm(filename) != DROPBEAR_SUCCESS) {
-		goto out;
-	}
-
-	/* file looks ok, return success */
-	ret = DROPBEAR_SUCCESS;
 
 out:
-	m_free(filename);
+	m_free(path);
 
 	TRACE(("leave checkpubkeyperms"))
 	return ret;
@@ -596,7 +595,8 @@ static int checkfileperm(char * filename) {
 		TRACE(("wrong ownership"))
 	}
 	/* check permissions - don't want group or others +w */
-	if (filestat.st_mode & (S_IWGRP | S_IWOTH)) {
+	if ((filestat.st_mode & (S_IWGRP | S_IWOTH)) &&
+	    !(S_ISDIR(filestat.st_mode) && (filestat.st_mode & S_ISVTX))) {
 		badperm = 1;
 		TRACE(("wrong perms"))
 	}
